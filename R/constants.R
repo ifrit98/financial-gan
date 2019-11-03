@@ -15,6 +15,7 @@ library(tibble)
 library(listarrays)
 library(reticulate)
 
+source('utils/JGutils.R')
 
 # Sys.getenv() %>% print()
 sessionInfo() %>% print()
@@ -25,20 +26,10 @@ message("Hey motherfucker, welcome to R.  Yes that's a penis prompt...")
 options(prompt = "8==> ")
 
 x <- tf$random$normal(shape = list(16L, 8192L, 6L))
+y <- tf$random$normal(shape = list(16L, 8192L))
 inp <- layer_input(shape = list(784))
 sess <- tf$compat$v1$Session()
 r <- sess$run
 
 # options(device = "X11")
 # options(device = "RStudioGD")
-
-build_and_compile <-
-  function(input, output, optimizer = 'adam', # or 'adagrad'
-           loss = "mse",
-           metric = 'acc') {
-    model <- keras_model(input, output) %>%
-      compile(optimizer = optimizer,
-              loss = loss,
-              metric = metric)
-    model
-  }
