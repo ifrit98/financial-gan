@@ -349,4 +349,148 @@ plt.clf()
 
 
 
+## Create VAE (optional)
+# TODO: Make your own VAE in tf (simplified/my_wheelhouse)
+
+model_ctx =  mx.cpu()
+class VAE(gluon.HybridBlock):
+    def __init__(self, n_hidden=400, n_latent=2, n_layers=1, n_output=784, \
+                 batch_size=100, act_type='relu', **kwargs):
+        self.soft_zero = 1e-10
+        self.n_latent = n_latent
+        self.batch_size = batch_size
+        self.output = None
+        self.mu = None
+        super(VAE, self).__init__(**kwargs)
+        
+        with self.name_scope():
+            self.encoder = nn.HybridSequential(prefix='encoder')
+            
+            for i in range(n_layers):
+                self.encoder.add(nn.Dense(n_hidden, activation=act_type))
+            self.encoder.add(nn.Dense(n_latent*2, activation=None))
+
+            self.decoder = nn.HybridSequential(prefix='decoder')
+            for i in range(n_layers):
+                self.decoder.add(nn.Dense(n_hidden, activation=act_type))
+            self.decoder.add(nn.Dense(n_output, activation='sigmoid'))
+
+    def hybrid_forward(self, F, x):
+        h = self.encoder(x)
+        #print(h)
+        mu_lv = F.split(h, axis=1, num_outputs=2)
+        mu = mu_lv[0]
+        lv = mu_lv[1]
+        self.mu = mu
+
+        eps = F.random_normal(loc=0, scale=1, shape=(self.batch_size, self.n_latent), ctx=model_ctx)
+        z = mu + F.exp(0.5*lv)*eps
+        y = self.decoder(z)
+        self.output = y
+
+        KL = 0.5*F.sum(1+lv-mu*mu-F.exp(lv),axis=1)
+        logloss = F.sum(x*F.log(y+self.soft_zero)+ (1-x)*F.log(1-y+self.soft_zero), axis=1)
+        loss = -logloss-KL
+
+        return loss
+
+
+batch_size = 64
+n_batches = VAE_data.shape[0]/batch_size
+VAE_data = VAE_data.values
+
+train_iter = mx.io.NDArrayIter(data={'data': VAE_data[:num_training_days,:-1]}, \
+                               label={'label': VAE_data[:num_training_days, -1]}, batch_size = batch_size)
+test_iter = mx.io.NDArrayIter(data={'data': VAE_data[num_training_days:,:-1]}, \
+                              label={'label': VAE_data[num_training_days:,-1]}, batch_size = batch_size)
+
+
+n_hidden = 400 # neurons in each layer
+n_latent = 2 
+n_layers = 3 # num of dense layers in encoder and decoder respectively
+n_output = VAE_data.shape[1] - 1 
+
+net = VAE(n_hidden=n_hidden, n_latent=n_latent, n_layers=n_layers, n_output=n_output, batch_size=batch_size, act_type='gelu')
+
+
+net.collect_params().initialize(mx.init.Xavier(), ctx=mx.cpu())
+net.hybridize()
+trainer = gluon.Trainer(net.collect_params(), 'adam', {'learning_rate': .01})
+
+## TODO: Anomaly detection with deep unsupervised learning in derivates pricing ??
+
+print(net)
+
+
+## Train VAE
+n_epoch = 150
+print_period = n_epoch // 10
+start = time.time()
+
+training_loss = []
+validation_loss = []
+for epoch in range(n_epoch):
+    epoch_loss = 0
+    epoch_val_loss = 0
+
+    train_iter.reset()
+    test_iter.reset()
+
+    n_batch_train = 0
+    for batch in train_iter:
+        n_batch_train +=1
+        data = batch.data[0].as_in_context(mx.cpu())
+
+        with autograd.record():
+            loss = net(data)
+        loss.backward()
+        trainer.step(data.shape[0])
+        epoch_loss += nd.mean(loss).asscalar()
+
+    n_batch_val = 0
+    for batch in test_iter:
+        n_batch_val +=1
+        data = batch.data[0].as_in_context(mx.cpu())
+        loss = net(data)
+        epoch_val_loss += nd.mean(loss).asscalar()
+
+    epoch_loss /= n_batch_train
+    epoch_val_loss /= n_batch_val
+
+    training_loss.append(epoch_loss)
+    validation_loss.append(epoch_val_loss)
+
+    """if epoch % max(print_period, 1) == 0:
+        print('Epoch {}, Training loss {:.2f}, Validation loss {:.2f}'.\
+              format(epoch, epoch_loss, epoch_val_loss))"""
+
+end = time.time()
+print('Training completed in {} seconds.'.format(int(end-start)))
+
+
+dataset_total_df['Date'] = dataset_ex_df['Date']
+vae_added_df = mx.nd.array(dataset_total_df.iloc[:, :-1].values)
+print('The shape of the newly created (from the autoencoder) features is {}.'.format(vae_added_df.shape))
+
+
+# Eigen portfolio with PCA
+# We want the PCA to create the new components to explain 80% of the variance
+pca = PCA(n_components=.8)
+
+x_pca = StandardScaler().fit_transform(vae_added_df)
+
+principalComponents = pca.fit_transform(x_pca)
+
+principalComponents.n_components_
+
+"""
+ So, in order to explain 80% of the variance we need 84 (out of the 112) features. 
+ This is still a lot. So, for now we will not include the autoencoder created features. 
+ Let's work on creating the autoencoder architecture in which we get the output from an 
+ intermediate layer (not the last one) and connect it to another Dense layer with, say, 
+ 30 neurons. Thus, we will 1) only extract higher level features, and 2) come up with 
+ significantly fewer number of columns.
+
+"""
+
 
